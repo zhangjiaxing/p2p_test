@@ -43,7 +43,7 @@ def encode_dict(d: dict):
 def decode_int(data: bytes):
     end_idx = data.find(b'e')
     if end_idx == -1:
-        raise TypeError()
+        raise IndexError(-len(data))
     i_bytes = data[1:end_idx]
     return int(i_bytes.decode()), data[end_idx+1:]
 
@@ -51,7 +51,7 @@ def decode_int(data: bytes):
 def decode_str(data: bytes):
     sep_idx = data.find(b':')
     if sep_idx == -1:
-        raise TypeError()
+        raise IndexError(-len(data))
     length = int(data[:sep_idx].decode())
     start_idx = sep_idx + 1
     end_idx = start_idx + length
@@ -61,18 +61,26 @@ def decode_str(data: bytes):
 
 
 def decode(data: bytes):
-    val, remaining_data = _decode(data)
+    try:
+        val, remaining_data = _decode(data)
+    except IndexError as idx:
+        val = None
+        pos = idx.args[0]
+        remaining_pos = len(data) + pos
+        remaining_data = data[remaining_pos:]
+
     if remaining_data != bytes():
         remaining_pos = len(data) - len(remaining_data)
         remaining_tips = remaining_data[:20]
         error_message = f"decode error at index {remaining_pos}, {remaining_tips}"
         raise TypeError(error_message)
+
     return val
 
 
 def _decode(data: bytes):
     if not isinstance(data, bytes) and len(data) < 1:
-        raise TypeError()
+        raise IndexError(-len(data))
     t = data[0]
     if t == ord(b'i'):
         return decode_int(data)
@@ -83,7 +91,7 @@ def _decode(data: bytes):
     elif t == ord(b'd'):
         return decode_dict(data)
     else:
-        raise TypeError()
+        raise IndexError(-len(data))
 
 
 def decode_list(data: bytes):
