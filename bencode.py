@@ -1,119 +1,121 @@
 def encode(item):
+    r = bytearray()
+
     if isinstance(item, int):
-        item_bytes = encode_int(item)
+        encode_int(item, r)
     elif isinstance(item, str):
-        item_bytes = encode_str(item)
+        encode_str(item, r)
     elif isinstance(item, list):
-        item_bytes = encode_list(item)
+        encode_list(item, r)
     elif isinstance(item, dict):
-        item_bytes = encode_dict(item)
+        encode_dict(item, r)
     else:
-        raise TypeError()
-    return item_bytes
+        raise ValueError(type(item))
+    return r
 
 
-def encode_int(i: int):
-    bi = str(i).encode()
-    return b'i' + bi + b'e'
+def encode_int(i: int, r: bytearray):
+    r += b'i'
+    r += str(i).encode()
+    r += b'e'
 
 
-def encode_str(s: str):
+def encode_str(s: str, r: bytearray):
     s_bytes = s.encode("utf-8")
-    prefix = "{length}:".format(length=str(len(s_bytes)))
-    return prefix.encode('ascii') + s_bytes
+    prefix = str(len(s_bytes)).encode()
+    r += prefix
+    r += b':'
+    r += s_bytes
 
 
-def encode_list(list1: list):
-    l_bytes = b'l'
+def encode_list(list1: list, r: bytearray):
+    r += b'l'
     for item in list1:
-        l_bytes += encode(item)
-    l_bytes += b'e'
-    return l_bytes
+        r += encode(item)
+    r += b'e'
 
 
-def encode_dict(d: dict):
-    d_bytes = b'd'
+def encode_dict(d: dict, r: bytearray):
+    r += b'd'
     for k, v in d.items():
-        d_bytes += encode(k)
-        d_bytes += encode(v)
-    d_bytes += b'e'
-    return d_bytes
+        r += encode(k)
+        r += encode(v)
+    r += b'e'
 
 
-def decode_int(data: bytes):
-    end_idx = data.find(b'e')
+def decode_int(data: bytes, start_idx: int):
+    start_idx += 1
+    end_idx = data.find(b'e', start_idx)
     if end_idx == -1:
         raise IndexError(-len(data))
-    i_bytes = data[1:end_idx]
-    return int(i_bytes.decode()), data[end_idx+1:]
+    i_bytes = data[start_idx:end_idx]
+    return int(i_bytes.decode()), end_idx+1
 
 
-def decode_str(data: bytes):
-    sep_idx = data.find(b':')
+def decode_str(data: bytes, start_idx: int):
+    sep_idx = data.find(b':', start_idx)
     if sep_idx == -1:
         raise IndexError(-len(data))
-    length = int(data[:sep_idx].decode())
-    start_idx = sep_idx + 1
-    end_idx = start_idx + length
-    string_bytes = data[start_idx: end_idx]
+    length = int(data[start_idx:sep_idx].decode())
+
+    str_idx = sep_idx + 1
+    end_idx = str_idx + length
+    string_bytes = data[str_idx: end_idx]
     string = string_bytes.decode()
-    return string, data[end_idx:]
+    return string, end_idx
 
 
 def decode(data: bytes):
     try:
-        val, remaining_data = _decode(data)
+        val, remaining_pos = _decode(data, 0)
     except IndexError as idx:
         val = None
-        pos = idx.args[0]
-        remaining_pos = len(data) + pos
-        remaining_data = data[remaining_pos:]
+        remaining_pos = idx.args[0]
 
-    if remaining_data != bytes():
-        remaining_pos = len(data) - len(remaining_data)
+    if remaining_pos != len(data):
+        remaining_data = data[remaining_pos:]
         remaining_tips = remaining_data[:20]
         error_message = f"decode error at index {remaining_pos}, {remaining_tips}"
-        raise TypeError(error_message)
-
+        raise ValueError(error_message)
     return val
 
 
-def _decode(data: bytes):
-    if not isinstance(data, bytes) and len(data) < 1:
+def _decode(data: bytes, start_idx: int):
+    if not isinstance(data, bytes) and len(data) - start_idx < 1:
         raise IndexError(-len(data))
-    t = data[0]
+    t = data[start_idx]
     if t == ord(b'i'):
-        return decode_int(data)
+        return decode_int(data, start_idx)
     elif ord(b'0') <= t <= ord(b'9'):
-        return decode_str(data)
+        return decode_str(data, start_idx)
     elif t == ord(b'l'):
-        return decode_list(data)
+        return decode_list(data, start_idx)
     elif t == ord(b'd'):
-        return decode_dict(data)
+        return decode_dict(data, start_idx)
     else:
         raise IndexError(-len(data))
 
 
-def decode_list(data: bytes):
+def decode_list(data: bytes, start_idx: int):
     list1 = []
-    data = data[1:]
+    start_idx += 1
     while True:
-        t = data[0]
+        t = data[start_idx]
         if t == ord(b'e'):
-            return list1, data[1:]
-        item, data = _decode(data)
+            return list1, start_idx+1
+        item, start_idx = _decode(data, start_idx)
         list1.append(item)
 
 
-def decode_dict(data: bytes):
+def decode_dict(data: bytes, start_idx: int):
     d = {}
-    data = data[1:]
+    start_idx += 1
     while True:
-        t = data[0]
+        t = data[start_idx]
         if t == ord(b'e'):
-            return d, data[1:]
-        key, data = _decode(data)
-        value, data = _decode(data)
+            return d, start_idx+1
+        key, start_idx = _decode(data, start_idx)
+        value, start_idx = _decode(data, start_idx)
         d[key] = value
 
 
