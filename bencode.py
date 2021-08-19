@@ -47,7 +47,7 @@ def decode_int(data: bytes, start_idx: int):
     start_idx += 1
     end_idx = data.find(b'e', start_idx)
     if end_idx == -1:
-        raise IndexError(-len(data))
+        raise IndexError(start_idx)
     i_bytes = data[start_idx:end_idx]
     return int(i_bytes.decode()), end_idx+1
 
@@ -55,7 +55,7 @@ def decode_int(data: bytes, start_idx: int):
 def decode_str(data: bytes, start_idx: int):
     sep_idx = data.find(b':', start_idx)
     if sep_idx == -1:
-        raise IndexError(-len(data))
+        raise IndexError(start_idx)
     length = int(data[start_idx:sep_idx].decode())
 
     str_idx = sep_idx + 1
@@ -82,7 +82,7 @@ def decode(data: bytes):
 
 def _decode(data: bytes, start_idx: int):
     if not isinstance(data, bytes) and len(data) - start_idx < 1:
-        raise IndexError(-len(data))
+        raise IndexError(start_idx)
     t = data[start_idx]
     if t == ord(b'i'):
         return decode_int(data, start_idx)
@@ -93,7 +93,7 @@ def _decode(data: bytes, start_idx: int):
     elif t == ord(b'd'):
         return decode_dict(data, start_idx)
     else:
-        raise IndexError(-len(data))
+        raise IndexError(start_idx)
 
 
 def decode_list(data: bytes, start_idx: int):
