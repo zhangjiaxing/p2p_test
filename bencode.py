@@ -5,6 +5,8 @@ def encode(item):
         encode_int(item, r)
     elif isinstance(item, str):
         encode_str(item, r)
+    elif isinstance(item, bytes):
+        encode_bytes(item, r)
     elif isinstance(item, list):
         encode_list(item, r)
     elif isinstance(item, dict):
@@ -22,6 +24,13 @@ def encode_int(i: int, r: bytearray):
 
 def encode_str(s: str, r: bytearray):
     s_bytes = s.encode("utf-8")
+    prefix = str(len(s_bytes)).encode()
+    r += prefix
+    r += b':'
+    r += s_bytes
+
+
+def encode_bytes(s_bytes: bytes, r: bytearray):
     prefix = str(len(s_bytes)).encode()
     r += prefix
     r += b':'
@@ -65,6 +74,18 @@ def decode_str(data: bytes, start_idx: int):
     return string, end_idx
 
 
+def decode_bytes(data: bytes, start_idx: int):
+    sep_idx = data.find(b':', start_idx)
+    if sep_idx == -1:
+        raise IndexError(start_idx)
+    length = int(data[start_idx:sep_idx].decode())
+
+    str_idx = sep_idx + 1
+    end_idx = str_idx + length
+    data_bytes = data[str_idx: end_idx]
+    return bytes(data_bytes), end_idx
+
+
 def decode(data: bytes):
     try:
         val, remaining_pos = _decode(data, 0)
@@ -87,7 +108,7 @@ def _decode(data: bytes, start_idx: int):
     if t == ord(b'i'):
         return decode_int(data, start_idx)
     elif ord(b'0') <= t <= ord(b'9'):
-        return decode_str(data, start_idx)
+        return decode_bytes(data, start_idx)
     elif t == ord(b'l'):
         return decode_list(data, start_idx)
     elif t == ord(b'd'):
@@ -125,9 +146,9 @@ if __name__ == '__main__':
     print(encode([5, 6, 7, 8, 9, 10, 11, 12, 13]))
 
     obj = {
-        'name': 'zhangsan',
+        'name': b'zhangsan',
         'age': 13,
-        'list': [1, "2", 3, "40", "500", "C6000"]
+        'list': [1, "2", 3, "40", b"500", "C6000"]
     }
     code = encode(obj)
     print(code)
