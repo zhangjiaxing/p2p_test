@@ -46,7 +46,9 @@ def encode_list(list1: list, r: bytearray):
 
 def encode_dict(d: dict, r: bytearray):
     r += b'd'
-    for k, v in d.items():
+
+    for k in sorted(d.keys()):
+        v = d[k]
         r += encode(k)
         r += encode(v)
     r += b'e'

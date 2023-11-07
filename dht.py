@@ -58,7 +58,7 @@ class Krpc:
             "t": cls.get_transaction_id(),
             "y": "q",
             "q": func,
-            "a": args
+            "a": args,
         }
         return Krpc(rpc)
 
@@ -168,22 +168,52 @@ class Dht:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
         self.socket.bind((local_ip, local_port,))
 
+        self.Krpc = Krpc
+        self.Krpc.init_class(self_node_id())
+
+    def run(self):
+        node_list = self.get_start_node_list()
+        for node_addr in node_list:
+            ping_packet = self.Krpc.ping().bencode()
+            print(node_addr)
+            self.socket.sendto(ping_packet, node_addr)
+            self.socket.sendto(ping_packet, node_addr)
+
+        while True:
+            rl, wl, xl = select.select([self.socket], [], [], 5)
+            if self.socket in rl:
+                recv_packet, addr = self.socket.recvfrom(1500)
+                print(addr, self.Krpc.from_bytes(recv_packet))
+            else:
+                pass
+
+    @staticmethod
+    def resolv_host(hostname) -> list:
+        _name, _alias_list, address_list = socket.gethostbyname_ex(hostname)
+        print(hostname, address_list)
+        return address_list
 
     @staticmethod
     def get_start_node_list():
-        return (
+        start_node_list = (
             ('router.bittorrent.com', 6881),
             ('router.utorrent.com', 6881),
-            ('router.bitcomet.com', 6881),
             ('dht.transmissionbt.com', 6881),
         )
 
+        node_addr_list = []
+        for hostname, port in start_node_list:
+            ip_list = Dht.resolv_host(hostname)
+            for ip in ip_list:
+                node_addr = (ip, port)
+                node_addr_list.append(node_addr)
+        return node_addr_list
 
-if __name__ == '__main__':
+def test():
     self_id = self_node_id()
     print_node_id(self_id)
 
-    print(distance_metric(b'ababab0127', b'ababab0111'))
+    print(distance_metric(b'hello0127', b'hello0111'))
 
     Krpc.init_class(self_id)
     ping_packet = Krpc.ping()
@@ -191,3 +221,7 @@ if __name__ == '__main__':
 
     print(ping_packet.ping_response())
 
+
+if __name__ == '__main__':
+    dht = Dht("0.0.0.0", 42891)
+    dht.run()
