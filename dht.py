@@ -8,8 +8,9 @@ def gen_node_id() -> bytes:
     return random.randbytes(20)
 
 
-def self_node_id():
+def load_self_node_id() -> bytes:
     return b'0123456789helloworld'
+    # return int.from_bytes(b'0123456789helloworld', 'big', signed=True)
 
 
 def gen_token() -> bytes:
@@ -18,6 +19,14 @@ def gen_token() -> bytes:
 
 def print_node_id(node_id: bytes):
     print(node_id.hex())
+
+
+def bytes_get_bit(node_id: bytes, i: int):
+    mask = 0x80
+    index = i//8
+    char = node_id[index]
+    x = mask >> (i % 8)
+    return 1 if x & char else 0
 
 
 def compact_addr_to_str(compact_addr: bytes):
@@ -47,7 +56,7 @@ class Krpc:
         cls.self_node_id = node_id
 
     @classmethod
-    def get_transaction_id(cls):
+    def get_transaction_id(cls) -> bytes:
         cls._transactionID += 1
         cls._transactionID %= 2**32
         return cls._transactionID.to_bytes(4, 'big', signed=False)
@@ -113,7 +122,7 @@ class Krpc:
 
     def ping_response(self):
         data = {
-            "id": self.__class__.self_node_id
+            "id": self.__class__.self_node_id,
         }
         t = self.rpc["t"]
         return self.create_response(t, data)
@@ -168,8 +177,9 @@ class Dht:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
         self.socket.bind((local_ip, local_port,))
 
+        self.self_node_id = load_self_node_id()
         self.Krpc = Krpc
-        self.Krpc.init_class(self_node_id())
+        self.Krpc.init_class(self.self_node_id)
 
     def run(self):
         node_list = self.get_start_node_list()
@@ -177,13 +187,20 @@ class Dht:
             ping_packet = self.Krpc.ping().bencode()
             print(node_addr)
             self.socket.sendto(ping_packet, node_addr)
-            self.socket.sendto(ping_packet, node_addr)
+
+            find_node_packet = self.Krpc.find_node(self.self_node_id).bencode()
+            self.socket.sendto(find_node_packet, node_addr)
+            # print(find_node_packet)
+
+            find_node_packet = self.Krpc.find_node(gen_node_id()).bencode()
+            self.socket.sendto(find_node_packet, node_addr)
 
         while True:
             rl, wl, xl = select.select([self.socket], [], [], 5)
             if self.socket in rl:
                 recv_packet, addr = self.socket.recvfrom(1500)
-                print(addr, self.Krpc.from_bytes(recv_packet))
+                response_krpc = self.Krpc.from_bytes(recv_packet)
+                print(response_krpc)
             else:
                 pass
 
@@ -209,8 +226,9 @@ class Dht:
                 node_addr_list.append(node_addr)
         return node_addr_list
 
+
 def test():
-    self_id = self_node_id()
+    self_id = load_self_node_id()
     print_node_id(self_id)
 
     print(distance_metric(b'hello0127', b'hello0111'))
