@@ -1,7 +1,9 @@
 import socket
-import select
 import random
-import bencode
+import time
+
+from krpc import Krpc, KrpcRequest
+from event import EventDispatcher, Event
 
 
 def gen_node_id() -> bytes:
@@ -11,10 +13,6 @@ def gen_node_id() -> bytes:
 def load_self_node_id() -> bytes:
     return b'0123456789helloworld'
     # return int.from_bytes(b'0123456789helloworld', 'big', signed=True)
-
-
-def gen_token() -> bytes:
-    return random.randbytes(10)
 
 
 def print_node_id(node_id: bytes):
@@ -47,162 +45,48 @@ def distance_metric(id1: bytes, id2: bytes):
     return i1 ^ i2
 
 
-class Krpc:
-    _transactionID = 0
-    self_node_id = b''
-
-    @classmethod
-    def init_class(cls, node_id: bytes):
-        cls.self_node_id = node_id
-
-    @classmethod
-    def get_transaction_id(cls) -> bytes:
-        cls._transactionID += 1
-        cls._transactionID %= 2**32
-        return cls._transactionID.to_bytes(4, 'big', signed=False)
-
-    @classmethod
-    def create_request(cls, func: str, args: dict):
-        rpc = {
-            "t": cls.get_transaction_id(),
-            "y": "q",
-            "q": func,
-            "a": args,
-        }
-        return Krpc(rpc)
-
-    @classmethod
-    def create_response(cls, transaction_id: bytes, response_data: dict):
-        rpc = {
-            "t": transaction_id,
-            "y": "r",
-            "r": response_data,
-        }
-        return Krpc(rpc)
-
-    @classmethod
-    def create_error(cls, transaction_id: bytes, err_number: int, msg: str = None):
-        err_desc = {
-            201: "一般错误",
-            202: "服务错误",
-            203: "协议错误, 比如不规范的包, 无效的参数, 或者错误的token",
-            204: "未知方法"
-        }
-
-        msg = msg or err_desc.get(err_number, "未知错误")
-        rpc = {
-            "t": transaction_id,
-            "y": "e",
-            "e": [err_number, msg]
-        }
-        return Krpc(rpc)
-
-    @classmethod
-    def ping(cls):
-        args = {
-            "id": cls.self_node_id
-        }
-        return cls.create_request("ping", args)
-
-    @classmethod
-    def find_node(cls, target_node: bytes):
-        args = {
-            "id": cls.self_node_id,
-            "target": target_node
-        }
-        return cls.create_request("find_node", args)
-
-    @classmethod
-    def get_peers(cls, info_hash: bytes):
-        args = {
-            "id": cls.self_node_id,
-            "info_hash": info_hash
-        }
-        return cls.create_request("get_peers", args)
-
-    def ping_response(self):
-        data = {
-            "id": self.__class__.self_node_id,
-        }
-        t = self.rpc["t"]
-        return self.create_response(t, data)
-
-    def find_node_response(self, nodes: bytes):
-        data = {
-            "id": self.__class__.self_node_id,
-            "nodes": nodes,
-        }
-        t = self.rpc["t"]
-        return self.create_response(t, data)
-
-    def get_peers_response_values(self, values: list):
-        data = {
-            "id": self.__class__.self_node_id,
-            "values": values,
-            "token": gen_token()
-        }
-        t = self.rpc["t"]
-        return self.create_response(t, data)
-
-    def get_peers_response_nodes(self, nodes: bytes):
-        data = {
-            "id": self.__class__.self_node_id,
-            "nodes": nodes,
-            "token": gen_token()
-        }
-        t = self.rpc["t"]
-        return self.create_response(t, data)
-
-    @staticmethod
-    def from_bytes(data: bytes):
-        rpc = bencode.decode(data)
-        return Krpc(rpc)
-
-    def __init__(self, rpc: dict):
-        self.rpc = rpc
-
-    def json(self):
-        return self.rpc
-
-    def __str__(self):
-        return repr(self.rpc)
-
-    def bencode(self):
-        return bencode.encode(self.rpc)
-
-
 class Dht:
 
     def __init__(self, local_ip, local_port):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        self.socket.bind((local_ip, local_port,))
-
         self.self_node_id = load_self_node_id()
-        self.Krpc = Krpc
-        self.Krpc.init_class(self.self_node_id)
+        self.dispatcher = EventDispatcher(local_ip, local_port)
+        self.dispatcher.set_request_handler(self.receive_packet)
+        self.KrpcRequest = KrpcRequest
+        self.KrpcRequest.init_class(self.self_node_id)
+
+    @staticmethod
+    def receive_packet(ev):
+        print("receive_packet: ", ev.event_type, ev.remote_krpc)
+
+    @staticmethod
+    def receive_ping(ev: Event):
+        print('receive ping response: ', ev.event_type, ev.remote_krpc)
+        print('time timeout: ', time.time())
+
+    @staticmethod
+    def receive_find_node(ev: Event):
+        print('receive find node response: ', ev.event_type, ev.remote_krpc)
+
+    @staticmethod
+    def process_event(ev: Event):
+        print(ev)
 
     def run(self):
         node_list = self.get_start_node_list()
+        print("time: ", time.time())
+
         for node_addr in node_list:
-            ping_packet = self.Krpc.ping().bencode()
+            ping_packet = self.KrpcRequest.ping()
             print(node_addr)
-            self.socket.sendto(ping_packet, node_addr)
+            self.dispatcher.send_krpc(ping_packet, node_addr, self.receive_ping)
 
-            find_node_packet = self.Krpc.find_node(self.self_node_id).bencode()
-            self.socket.sendto(find_node_packet, node_addr)
-            # print(find_node_packet)
+            find_node_packet = self.KrpcRequest.find_node(self.self_node_id)
+            self.dispatcher.send_krpc(find_node_packet, node_addr, self.receive_find_node)
 
-            find_node_packet = self.Krpc.find_node(gen_node_id()).bencode()
-            self.socket.sendto(find_node_packet, node_addr)
-
+            find_node_packet = self.KrpcRequest.find_node(gen_node_id())
+            self.dispatcher.send_krpc(find_node_packet, node_addr, self.receive_find_node)
         while True:
-            rl, wl, xl = select.select([self.socket], [], [], 5)
-            if self.socket in rl:
-                recv_packet, addr = self.socket.recvfrom(1500)
-                response_krpc = self.Krpc.from_bytes(recv_packet)
-                print(response_krpc)
-            else:
-                pass
+            self.dispatcher.process_event()
 
     @staticmethod
     def resolv_host(hostname) -> list:
@@ -241,5 +125,5 @@ def test():
 
 
 if __name__ == '__main__':
-    dht = Dht("0.0.0.0", 42891)
+    dht = Dht("0.0.0.0", 42892)
     dht.run()

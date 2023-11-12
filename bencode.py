@@ -47,7 +47,8 @@ def encode_list(list1: list, r: bytearray):
 def encode_dict(d: dict, r: bytearray):
     r += b'd'
 
-    for k in sorted(d.keys()):
+    keys = [key if isinstance(key, bytes) else key.encode() for key in d.keys()]
+    for k in sorted(keys):
         v = d[k]
         r += encode(k)
         r += encode(v)
