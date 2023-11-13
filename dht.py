@@ -3,10 +3,11 @@ import random
 import time
 
 from krpc import Krpc, KrpcRequest
-from event import EventDispatcher, Event, KrpcEvent, EventProcessor, Timer
+from event import EventDispatcher, Event, KrpcEvent, EventProcessor, Timer, EventType
 
 
 def gen_node_id() -> bytes:
+    random.seed(time.time())
     return random.randbytes(20)
 
 
@@ -19,12 +20,23 @@ def print_node_id(node_id: bytes):
     print(node_id.hex())
 
 
-def bytes_get_bit(node_id: bytes, i: int):
-    mask = 0x80
-    index = i//8
-    char = node_id[index]
-    x = mask >> (i % 8)
-    return 1 if x & char else 0
+def bytes_get_bits(node_id: bytes, nbits: int):
+    n_copy = nbits // 8
+    tmp_id = node_id[:n_copy]
+
+    char = node_id[n_copy]
+    nbits = nbits % 8
+    x = 0
+    for n in range(0, nbits):
+        mask = 0x80
+        x |= mask >> n
+
+    if nbits > 0:
+        char |= x
+        tmp_id += char
+        n_copy += 1
+    tmp_id += b'\0' * (20 - n_copy)
+    return tmp_id
 
 
 def compact_addr_to_str(compact_addr: bytes):
@@ -45,16 +57,28 @@ def distance_metric(id1: bytes, id2: bytes):
     return i1 ^ i2
 
 
+class Bucket:
+    def __init__(self, node_start, pow):
+        self.node_list = []
+        self.cache_list = []
+        self.node_start = node_start
+        self.pow = pow
+
+
+
 class Dht(EventProcessor):
+    K = 8
 
     def __init__(self, local_ip, local_port):
         self.self_node_id = load_self_node_id()
         self.dispatcher = EventDispatcher(self, local_ip, local_port)
         self.KrpcRequest = KrpcRequest
         self.KrpcRequest.init_class(self.self_node_id)
+        self.table = []
+        self.self_node_id
 
     def do_dht(self, ev: KrpcEvent):
-        pass
+
 
     @staticmethod
     def receive_packet(ev: KrpcEvent):
@@ -68,12 +92,23 @@ class Dht(EventProcessor):
     def receive_find_node(ev: KrpcEvent):
         print('receive find node response: ', ev.event_type, ev.remote_krpc)
 
-    def post_event(self, ev: Event):
+    def post_event(self, ev: Event or KrpcEvent):
+        if ev.event_type == EventType.EVENT_TIMEOUT:
+            pass
+        if ev.event_type == EventType.EVENT_REQUEST:
+            pass
+        if ev.event_type == EventType.EVENT_RESPONSE:
+            self.build_table(ev.remote_krpc)
+
+    def build_table(self, krpc: Krpc):
+        print('build table', krpc)
+        pass
+
+    def check_table(self):
         pass
 
     def run(self):
         node_list = self.get_start_node_list()
-        print("time: ", time.time())
 
         for node_addr in node_list:
             ping_packet = self.KrpcRequest.ping()
@@ -86,7 +121,7 @@ class Dht(EventProcessor):
             find_node_packet = self.KrpcRequest.find_node(gen_node_id())
             self.dispatcher.send_krpc(find_node_packet, node_addr, self.receive_find_node)
 
-        timer = Timer(2, lambda x: print("hello", x), oneshot=False)
+        timer = Timer(10, lambda x: print("hello", x), 'world', oneshot=False)
         timer.start()
         self.dispatcher.add_timer(timer)
 
