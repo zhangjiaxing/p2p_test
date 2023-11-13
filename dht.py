@@ -3,7 +3,7 @@ import random
 import time
 
 from krpc import Krpc, KrpcRequest
-from event import EventDispatcher, Event
+from event import EventDispatcher, Event, KrpcEvent, EventProcessor, Timer
 
 
 def gen_node_id() -> bytes:
@@ -45,31 +45,31 @@ def distance_metric(id1: bytes, id2: bytes):
     return i1 ^ i2
 
 
-class Dht:
+class Dht(EventProcessor):
 
     def __init__(self, local_ip, local_port):
         self.self_node_id = load_self_node_id()
-        self.dispatcher = EventDispatcher(local_ip, local_port)
-        self.dispatcher.set_request_handler(self.receive_packet)
+        self.dispatcher = EventDispatcher(self, local_ip, local_port)
         self.KrpcRequest = KrpcRequest
         self.KrpcRequest.init_class(self.self_node_id)
 
+    def do_dht(self, ev: KrpcEvent):
+        pass
+
     @staticmethod
-    def receive_packet(ev):
+    def receive_packet(ev: KrpcEvent):
         print("receive_packet: ", ev.event_type, ev.remote_krpc)
 
     @staticmethod
-    def receive_ping(ev: Event):
+    def receive_ping(ev: KrpcEvent):
         print('receive ping response: ', ev.event_type, ev.remote_krpc)
-        print('time timeout: ', time.time())
 
     @staticmethod
-    def receive_find_node(ev: Event):
+    def receive_find_node(ev: KrpcEvent):
         print('receive find node response: ', ev.event_type, ev.remote_krpc)
 
-    @staticmethod
-    def process_event(ev: Event):
-        print(ev)
+    def post_event(self, ev: Event):
+        pass
 
     def run(self):
         node_list = self.get_start_node_list()
@@ -85,6 +85,11 @@ class Dht:
 
             find_node_packet = self.KrpcRequest.find_node(gen_node_id())
             self.dispatcher.send_krpc(find_node_packet, node_addr, self.receive_find_node)
+
+        timer = Timer(2, lambda x: print("hello", x), oneshot=False)
+        timer.start()
+        self.dispatcher.add_timer(timer)
+
         while True:
             self.dispatcher.process_event()
 

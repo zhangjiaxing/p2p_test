@@ -8,14 +8,21 @@ from krpc import Krpc, KrpcRequest
 
 
 class EventType(Enum):
-    EVENT_TIMEOUT = 0
-    EVENT_REQUEST = 1
-    EVENT_RESPONSE = 2
+    EVENT_STARTUP = 0
+    EVENT_QUIT = 1
+    EVENT_TIMEOUT = 3
+    EVENT_REQUEST = 4
+    EVENT_RESPONSE = 5
 
 
 class Event:
-    def __init__(self, event_type: EventType, local_krpc: KrpcRequest or None, remote_krpc: Krpc or None = None):
+    def __init__(self, event_type: EventType):
         self.event_type = event_type
+
+
+class KrpcEvent(Event):
+    def __init__(self, event_type: EventType, local_krpc: KrpcRequest or None = None, remote_krpc: Krpc or None = None):
+        super().__init__(event_type)
         self.local_krpc: KrpcRequest or None = local_krpc
         self.remote_krpc: KrpcRequest or None = remote_krpc
 
@@ -36,18 +43,50 @@ class Event:
         return desc
 
 
+class EventProcessor:
+    def post_event(self, ev: Event):
+        pass
+
+
+class Timer:
+    def __lt__(self, other):
+        return self.next < other.next
+
+    def __init__(self, timeout, callback, args=None, oneshot=False):
+        self.timeout = timeout
+        self.oneshot = oneshot
+        self.callback = callback
+        self.args = args
+        self.next = float('+inf')
+
+    def start(self):
+        self.next = self.timeout + time.time()
+
+    def timeleft(self):
+        return self.next - time.time()
+
+    def trigger(self):
+        self.callback(self.args)
+        now = time.time()
+        print(f"time: {now}, next:{self.next}, timeout: {self.timeout}")
+
+        if self.oneshot is True:
+            self.next = float('+inf')
+        else:
+            self.next += self.timeout
+
+
 class EventDispatcher:
-    def __init__(self, local_ip, local_port):
+    def __init__(self, processor: EventProcessor, local_ip, local_port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
         self.sock.bind((local_ip, local_port,))
-        self.krpc_heap: typing.List[KrpcRequest] = []
-        self.krpc_dict = {}
-        self.response_dict = {}
-        self.request_list = []
-        self.request_handler: typing.Callable or None = None
+        self.timer_list = []
+        self.krpc_heap: typing.List[KrpcRequest] = []  # 本机的krpc请求，找到超时的请求
+        self.krpc_dict = {}     # 本机发送的krpc请求
+        self.event_dict = {}
+        self.processor = processor
 
-    def set_request_handler(self, callback):
-        self.request_handler = callback
+        self.processor.post_event(Event(EventType.EVENT_STARTUP))
 
     def push_request(self, krpc: KrpcRequest):
         heapq.heappush(self.krpc_heap, krpc)
@@ -60,52 +99,44 @@ class EventDispatcher:
             return krpc
 
     def process_event(self):
-        ev = None
+        ev: KrpcEvent or None = None
 
-        rl, wl, xl = select.select([self.sock], [], [], 0.1)
+        rl, wl, xl = select.select([self.sock], [], [], 0.2)
         if self.sock in rl:
             recv_packet, addr = self.sock.recvfrom(1500)
             recv_krpc = Krpc.from_bytes(recv_packet)
             ev = self.process_receive_krpc(recv_krpc)
         else:
-            if len(self.krpc_heap) > 0:
-                deadline = self.krpc_heap[0].deadline
+            while self.timer_list and self.timer_list[0].timeleft() <= 0:
+                timer = heapq.heappop(self.timer_list)
+                timer.trigger()
+                heapq.heappush(self.timer_list, timer)
 
-                if time.time() > deadline:
-                    ev = self.process_timeout_krpc()
+            while self.krpc_heap and time.time() >= self.krpc_heap[0].deadline:
+                ev = self.process_timeout_krpc()
 
         if ev is not None:
-            if ev.event_type == EventType.EVENT_REQUEST:
-                self.request_list.append(ev)
-            else:
-                t = ev.local_krpc.transaction_id()
-                self.response_dict[t] = ev
+            self.processor.post_event(ev)
 
-        while len(self.request_list) > 0:
-            self.request_handler(self.request_list[0])
-            self.request_list.pop(0)
-
-        for t, ev in self.response_dict.items():
             if ev.local_krpc.callback:
                 ev.local_krpc.callback(ev)
-        self.response_dict.clear()
 
-    def process_timeout_krpc(self) -> Event | None:
+    def process_timeout_krpc(self) -> KrpcEvent | None:
         krpc = heapq.heappop(self.krpc_heap)
         t = krpc.transaction_id()
         if t in self.krpc_dict:
             self.krpc_dict.pop(t)
-            return Event(EventType.EVENT_TIMEOUT, krpc)
+            return KrpcEvent(EventType.EVENT_TIMEOUT, krpc)
         else:
             return None
 
-    def process_receive_krpc(self, recv_krpc: Krpc) -> Event | None:
+    def process_receive_krpc(self, recv_krpc: Krpc) -> KrpcEvent | None:
         t = recv_krpc.transaction_id()
         if t in self.krpc_dict.keys():
             send_rpc = self.krpc_dict.pop(t)
-            return Event(EventType.EVENT_RESPONSE, send_rpc, recv_krpc)
+            return KrpcEvent(EventType.EVENT_RESPONSE, send_rpc, recv_krpc)
         else:
-            return Event(EventType.EVENT_REQUEST, None, recv_krpc)
+            return KrpcEvent(EventType.EVENT_REQUEST, None, recv_krpc)
 
     def send_krpc(self, krpc: KrpcRequest, sock_addr, callback, timeout=5):
         krpc.set_timeout(timeout)
@@ -114,13 +145,5 @@ class EventDispatcher:
         packet = krpc.bencode()
         self.sock.sendto(packet, sock_addr)
 
-    def check_transaction_event(self, transaction_id):
-        return transaction_id in self.response_dict
-
-    def wait_transaction(self, transaction_id: bytes) -> Event:
-        while not self.check_transaction_event(transaction_id):
-            self.process_event()
-        return self.response_dict[transaction_id]
-
-    def check_request_event(self) -> bool:
-        return bool(self.request_list)
+    def add_timer(self, timer: Timer):
+        heapq.heappush(self.timer_list, timer)
