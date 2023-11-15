@@ -115,12 +115,14 @@ class Krpc:
         return self.create_response(t, data)
 
     @staticmethod
-    def from_bytes(data: bytes):
+    def from_bytes(data: bytes, sender_ip: str, sender_port: int):
         rpc = bencode.decode(data)
-        return Krpc(rpc)
+        return Krpc(rpc, sender_ip, sender_port)
 
-    def __init__(self, rpc: dict):
+    def __init__(self, rpc: dict, sender_ip: str = None, sender_port: int = None):
         self.rpc = rpc
+        self.sender_ip = sender_ip
+        self.sender_port = sender_port
 
     def transaction_id(self) -> bytes:
         return self.rpc.get(b't')

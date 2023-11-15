@@ -104,7 +104,7 @@ class EventDispatcher:
         rl, wl, xl = select.select([self.sock], [], [], 0.2)
         if self.sock in rl:
             recv_packet, addr = self.sock.recvfrom(1500)
-            recv_krpc = Krpc.from_bytes(recv_packet)
+            recv_krpc = Krpc.from_bytes(recv_packet, addr[0], addr[1])
             ev = self.process_receive_krpc(recv_krpc)
         else:
             while self.timer_list and self.timer_list[0].timeleft() <= 0:
