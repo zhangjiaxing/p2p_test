@@ -10,11 +10,11 @@ def gen_token() -> bytes:
 
 class Krpc:
     _transactionID = 0
-    self_node_id = b''
+    _self_node_id = b''
 
     @classmethod
     def init_class(cls, node_id: bytes):
-        cls.self_node_id = node_id
+        cls._self_node_id = node_id
 
     @classmethod
     def gen_transaction_id(cls) -> bytes:
@@ -61,14 +61,14 @@ class Krpc:
     @classmethod
     def ping(cls):
         args = {
-            b"id": cls.self_node_id
+            b"id": cls._self_node_id
         }
         return cls.create_request("ping", args)
 
     @classmethod
     def find_node(cls, target_node: bytes):
         args = {
-            b"id": cls.self_node_id,
+            b"id": cls._self_node_id,
             b"target": target_node
         }
         return cls.create_request("find_node", args)
@@ -76,21 +76,21 @@ class Krpc:
     @classmethod
     def get_peers(cls, info_hash: bytes):
         args = {
-            b"id": cls.self_node_id,
+            b"id": cls._self_node_id,
             b"info_hash": info_hash
         }
         return cls.create_request("get_peers", args)
 
     def ping_response(self):
         data = {
-            b"id": self.__class__.self_node_id,
+            b"id": self.__class__._self_node_id,
         }
         t = self.rpc[b't']
         return self.create_response(t, data)
 
     def find_node_response(self, nodes: bytes):
         data = {
-            b"id": self.__class__.self_node_id,
+            b"id": self.__class__._self_node_id,
             b"nodes": nodes,
         }
         t = self.rpc[b't']
@@ -98,7 +98,7 @@ class Krpc:
 
     def get_peers_response_values(self, values: list):
         data = {
-            b"id": self.__class__.self_node_id,
+            b"id": self.__class__._self_node_id,
             b"values": values,
             b"token": gen_token()
         }
@@ -107,7 +107,7 @@ class Krpc:
 
     def get_peers_response_nodes(self, nodes: bytes):
         data = {
-            b"id": self.__class__.self_node_id,
+            b"id": self.__class__._self_node_id,
             b"nodes": nodes,
             b"token": gen_token()
         }
@@ -127,6 +127,12 @@ class Krpc:
     def transaction_id(self) -> bytes:
         return self.rpc.get(b't')
 
+    def error(self):
+        if self.rpc[b'y'] == b'e':
+            return self.rpc[b'e']
+        else:
+            return None
+
     def json(self):
         return self.rpc
 
@@ -142,7 +148,8 @@ class KrpcRequest(Krpc):
         super().__init__(rpc)
         self.deadline = 0
         self.callback: typing.Callable or None = None
-        self.kwargs: typing.Dict = {}
+        self.args = None
+        self.response: Krpc = None
 
     def __lt__(self, other):
         return self.deadline < other.deadline
@@ -152,6 +159,8 @@ class KrpcRequest(Krpc):
             timeout = 1
         self.deadline = time.time() + timeout
 
-    def set_callback(self, callback: typing.Callable, kwargs=None):
+    def set_callback(self, callback: typing.Callable, args=None):
+        if not isinstance(callback, typing.Callable):
+            return Exception("callback")
         self.callback = callback
-        self.kwargs = kwargs or {}
+        self.args = args
