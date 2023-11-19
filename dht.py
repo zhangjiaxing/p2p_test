@@ -229,7 +229,7 @@ class Dht(EventProcessor):
             print(idx, bucket)
         print("=======================END=============")
 
-    def ping_reponse_join_table(self, krpc: Krpc):
+    def ping_response_join_table(self, krpc: Krpc):
         krpc_dict = krpc.json()
         node_id: bytes = krpc_dict[b'r'][b'id']
         node_ip = krpc.sender_ip
@@ -240,12 +240,11 @@ class Dht(EventProcessor):
 
     @staticmethod
     def receive_ping(ev: KrpcEvent):
-        print('receive ping response: ', ev.event_type, ev.remote_krpc)
+        print('receive ping response: ', ev.event_type, ev.response_krpc)
 
     @staticmethod
     def receive_find_node(ev: KrpcEvent):
-        print('receive find node response: ', ev.event_type, ev.remote_krpc)
-        # ping and join_table
+        print('receive find node response: ', ev.event_type, ev.response_krpc)
 
     def post_event(self, ev: Event or KrpcEvent):
         if ev.event_type == EventType.EVENT_TIMEOUT:
@@ -253,7 +252,7 @@ class Dht(EventProcessor):
         if ev.event_type == EventType.EVENT_REQUEST:
             pass
         if ev.event_type == EventType.EVENT_RESPONSE:
-            self.ping_reponse_join_table(ev.remote_krpc)
+            self.ping_response_join_table(ev.response_krpc)
 
     def check_table(self):
         pass

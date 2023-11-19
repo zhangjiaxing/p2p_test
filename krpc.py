@@ -142,6 +142,7 @@ class KrpcRequest(Krpc):
         super().__init__(rpc)
         self.deadline = 0
         self.callback: typing.Callable or None = None
+        self.kwargs: typing.Dict = {}
 
     def __lt__(self, other):
         return self.deadline < other.deadline
@@ -151,5 +152,6 @@ class KrpcRequest(Krpc):
             timeout = 1
         self.deadline = time.time() + timeout
 
-    def set_callback(self, callback: typing.Callable):
+    def set_callback(self, callback: typing.Callable, kwargs=None):
         self.callback = callback
+        self.kwargs = kwargs or {}

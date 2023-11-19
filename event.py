@@ -21,10 +21,10 @@ class Event:
 
 
 class KrpcEvent(Event):
-    def __init__(self, event_type: EventType, local_krpc: KrpcRequest or None = None, remote_krpc: Krpc or None = None):
+    def __init__(self, event_type: EventType, req_krpc: KrpcRequest or None = None, response_krpc: Krpc or None = None):
         super().__init__(event_type)
-        self.local_krpc: KrpcRequest or None = local_krpc
-        self.remote_krpc: KrpcRequest or None = remote_krpc
+        self.req_krpc: KrpcRequest or None = req_krpc
+        self.response_krpc: Krpc or None = response_krpc
 
     def __str__(self):
         desc = ''
@@ -35,10 +35,10 @@ class KrpcEvent(Event):
         elif self.event_type == EventType.EVENT_RESPONSE:
             desc += 'response event:'
 
-        desc += '\nlocal_krpc: '
-        desc += str(self.local_krpc)
-        desc += '\nremote_krpc: '
-        desc += str(self.remote_krpc)
+        desc += '\nreq_krpc: '
+        desc += str(self.req_krpc)
+        desc += '\nresponse_krpc: '
+        desc += str(self.response_krpc)
         desc += '\n'
         return desc
 
@@ -118,8 +118,8 @@ class EventDispatcher:
         if ev is not None:
             self.processor.post_event(ev)
 
-            if ev.local_krpc.callback:
-                ev.local_krpc.callback(ev)
+            if ev.req_krpc.callback:
+                ev.req_krpc.callback(ev, **ev.req_krpc.kwargs)
 
     def process_timeout_krpc(self) -> KrpcEvent | None:
         krpc = heapq.heappop(self.krpc_heap)
@@ -138,9 +138,9 @@ class EventDispatcher:
         else:
             return KrpcEvent(EventType.EVENT_REQUEST, None, recv_krpc)
 
-    def send_krpc(self, krpc: KrpcRequest, sock_addr, callback, timeout=5):
+    def send_krpc(self, krpc: KrpcRequest, sock_addr, callback, kwargs: typing.Dict or None = None, timeout=5):
         krpc.set_timeout(timeout)
-        krpc.set_callback(callback)
+        krpc.set_callback(callback, kwargs)
         self.push_request(krpc)
         packet = krpc.bencode()
         self.sock.sendto(packet, sock_addr)
