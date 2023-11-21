@@ -152,17 +152,15 @@ class EventDispatcher:
         else:
             return KrpcEvent(EventType.EVENT_REQUEST, None, recv_krpc)
 
-    def send_krpc(self, krpc: KrpcRequest, sock_addr, callback=None, args=None, timeout=5):
+    def send_krpc(self, krpc: KrpcRequest, sock_addr, callback=None, args=None, sync=False, timeout=5):
         krpc.set_timeout(timeout)
         krpc.set_callback(callback, args)
 
-        if callback is None:
+        if sync:
             self.wait_set.add(krpc.transaction_id())
 
         self.push_request(krpc)
         packet = krpc.bencode()
-        self.sock.sendto(packet, sock_addr)
-        time.sleep(0.1)
         self.sock.sendto(packet, sock_addr)
 
     def wait_response(self, transaction_id: bytes):

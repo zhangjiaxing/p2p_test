@@ -20,15 +20,19 @@ https://www.cnblogs.com/LittleHann/p/6180296.html#_lab2_1_2
 """
 
 
-def gen_node_id() -> bytes:
+def random_node_id() -> bytes:
     random.seed(time.time())
     return random.randbytes(20)
 
 
 def load_self_node_id() -> bytes:
-    return bytes.fromhex("AA02030405060708090001020304050607080900")
+    return bytes.fromhex("2202030405060708090001020304050607080900")
     # return b'0123456789helloworld'
     # return int.from_bytes(b'0123456789helloworld', 'big', signed=True)
+
+
+def find_node_id() -> bytes:
+    return bytes.fromhex("FF01020304050607080901020304050607080900")
 
 
 def print_node_id(node_id: bytes):
@@ -41,7 +45,7 @@ def bytes_get_bit(node_id: bytes, idx: int) -> bool:
 
     bit_pos = idx % 8
     mask = 0x80 >> bit_pos
-    if mask | char == mask:
+    if mask & char == mask:
         return True
     else:
         return False
@@ -59,8 +63,8 @@ def bytes_set_bit(node_id: bytes, idx: int, state: bool):
         ret_node_id[bytes_pos] = char
     else:
         mask = 0x80 >> bit_pos
-        mask = ~mask
-        char |= mask
+        mask = (~mask) & 0xff
+        char &= mask
         ret_node_id[bytes_pos] = char
     return bytes(ret_node_id)
 
@@ -155,14 +159,15 @@ class Bucket:
             else:
                 return idx  # 返回合适的K桶下标
         """
-        self.nodes: typing.OrderedDict[bytes, Node] = OrderedDict()  # 越后面的位置node越新鲜
-        self.caches: typing.OrderedDict[bytes, Node] = OrderedDict()  # 越后面的位置node越新鲜
+        self.nodes: typing.OrderedDict[Node] = OrderedDict()  # 越后面的位置node越新鲜
+        self.caches: typing.OrderedDict[Node] = OrderedDict()  # 越后面的位置node越新鲜
         self.node_start: bytes = node_start
         self.index: int = index
         self.power: int = power
 
     def __str__(self):
-        return f"Bucket(idx: {self.index}, pow: {self.power}, start: {self.node_start})"
+        start = self.node_start.hex()
+        return f"Bucket(idx: {self.index}, pow: {self.power}, start: {start}, node: {len(self.nodes)})"
 
     def is_full(self):
         return len(self.nodes) == self.K
@@ -197,8 +202,8 @@ class Bucket:
         return start_int <= node_int < end_int
 
     def add_node(self, node: Node):
-        # print("add_node: ", self, node)
-        if len(self.nodes) >= self.K and node.node_id not in self.nodes:
+        # print(">>> in add_node: ", self, node)
+        if len(self.nodes) < self.K and node.node_id not in self.nodes:
             self.nodes[node.node_id] = node
             self.nodes.move_to_end(node.node_id)
         else:
@@ -228,6 +233,13 @@ class Dht(EventProcessor):
         if bucket.is_full() and bucket.can_fork():
             bucket1, bucket2 = bucket.fork()
             self.table.pop(-1)
+
+            for node in bucket.nodes.values():
+                if bucket1.in_range(node.node_id):
+                    bucket1.add_node(node)
+                else:
+                    bucket2.add_node(node)
+
             self.table.append(bucket1)
             self.table.append(bucket2)
 
@@ -236,6 +248,7 @@ class Dht(EventProcessor):
             if bucket.in_range(node.node_id):
                 bucket.add_node(node)
                 self.check_bucket(idx)
+                print("join_table: ", node)
                 return
         print("ERROR: join_dht")
         print("node", node)
@@ -245,7 +258,6 @@ class Dht(EventProcessor):
 
     def ping_response_join_table(self, krpc: Krpc):
         krpc_dict = krpc.json()
-        # print(krpc.json())
         node_id: bytes = krpc_dict[b'r'][b'id']
         node_ip = krpc.sender_ip
         node_port = krpc.sender_port
@@ -253,57 +265,21 @@ class Dht(EventProcessor):
         node = Node(node_id, node_ip, node_port)
         self.join_table(node)
 
+    def join_table_test(self):
+        node = Node(random_node_id(), "0.0.0.0", 6666)
+        self.join_table(node)
+
+    def print_table(self):
+        print("[table]===========================")
+        print("table len: ", len(self.table))
+        for bucket in self.table:
+            print(bucket)
+
     @staticmethod
     def receive_ping(ev: KrpcEvent, args):
         if ev.event_type == EventType.EVENT_TIMEOUT:
             return
-
         print('receive ping response: ', ev.event_type, ev.response_krpc.sender_ip)
-
-    def receive_find_node(self, ev: KrpcEvent, args):
-        if ev.event_type != EventType.EVENT_RESPONSE:
-            return
-
-        print('receive find node response: ', ev.event_type)
-        # find_desc = {'target': target_node, 'send_set': set()}
-        print(args)
-        target_id: bytes = args['target']
-        krpc: Krpc = ev.response_krpc
-        response = krpc.json()
-        response_node_id = response[b'r'][b'id']
-        send_set: typing.Set[Node] = args['send_set']
-        received_node = Node(response_node_id, krpc.sender_ip, krpc.sender_port)
-        # print(received_node)
-        if received_node.node_id == target_id:
-            print("found1111111111", target_id, received_node.node_id)
-            return
-        send_set.add(received_node)
-
-        padding_set: typing.Set[Node] = set()
-        for node in Node.node_list_from_bytes(response[b'r'][b'nodes']):
-            if node.node_id == args['target']:
-                print("found2222")
-                return
-            print(f'node -> {node}')
-            padding_set.add(node)
-
-        # padding_set.difference_update(send_set)
-        distance_nodes: typing.List = list(padding_set)
-
-        distance_cmp = partial(distance_metric, response_node_id)
-        distance_nodes.sort(key=distance_cmp)
-
-        print("0: ", distance_nodes[0])
-        print("sorted1:", distance_nodes[0].node_id.hex(),
-              "distance_metric: ", distance_metric(target_id, distance_nodes[0].node_id))
-        print("sorted2:", distance_nodes[-1].node_id.hex(),
-              "distance_metric: ", distance_metric(target_id, distance_nodes[-1].node_id))
-        send_set.update(distance_nodes[-4:])
-
-        distance_nodes = distance_nodes[:3]
-        for node in distance_nodes:
-            addr = node.ip, node.port
-            self.find_node(addr, target_id)
 
     def post_event(self, ev: Event or KrpcEvent):
         if ev.event_type == EventType.EVENT_TIMEOUT:
@@ -313,19 +289,19 @@ class Dht(EventProcessor):
         if ev.event_type == EventType.EVENT_RESPONSE:
             self.ping_response_join_table(ev.response_krpc)
 
-    def check_table(self):
-        pass
-
-    def find_node(self, node_addr_list: list, target_node: bytes):
+    def find_node(self, node_addr_list: list, target_node: bytes, min_distance=float('+inf')):
         # find_desc = {'target': target_node, 'send_set': set()}
         # self.dispatcher.send_krpc(find_node_packet, node_addr, self.receive_find_node, find_desc)
         print(">>>>>>> in find_node")
 
         q = []
-        node_set: typing.Set[Node] = set()
+        node_set: typing.Set = set()
         for node_addr in node_addr_list:
+            ping_packet = self.KrpcRequest.ping()
+            self.dispatcher.send_krpc(ping_packet, node_addr, timeout=3)
+
             find_node_packet = self.KrpcRequest.find_node(target_node)
-            self.dispatcher.send_krpc(find_node_packet, node_addr, timeout=3)
+            self.dispatcher.send_krpc(find_node_packet, node_addr, sync=True, timeout=3)
             tid = find_node_packet.transaction_id()
             q.append(tid)
 
@@ -337,20 +313,35 @@ class Dht(EventProcessor):
                 node_set.update(nodes)
 
         print("node_set len :", len(node_set))
+        if not node_set:
+            print("node_set len = 0")
+            self.print_table()
+            return
+
         node_list = list(node_set)
         sort_node_list(node_list, target_node)
         node_list = node_list[:16]
 
+        print("old_distance=", min_distance)
+        print("new_distance=", distance_metric(node_list[0], target_node))
+
+        if min_distance > distance_metric(node_list[0], target_node):
+            min_distance = distance_metric(node_list[0], target_node)
+        else:
+            print("find node done,,,,,,,,,")
+            self.print_table()
+            return
+
         next_addr_list = []
         for node in node_list:
             print(f'find_node, node:{node} target: {target_node.hex()}')
+
             addr = (node.ip, node.port,)
             next_addr_list.append(addr)
 
         if len(next_addr_list) > 0:
-            self.find_node(next_addr_list, target_node)
+            self.find_node(next_addr_list, target_node, min_distance)
 
-        print("find node done")
 
     def run(self):
         node_list = self.get_start_node_list()
@@ -361,13 +352,13 @@ class Dht(EventProcessor):
         #     self.dispatcher.send_krpc(ping_packet, node_addr, self.receive_ping)
         #
         #     self.find_node(node_addr, self.self_node_id)
-        #     # self.find_node(node_addr, gen_node_id())
+        #     # self.find_node(node_addr, random_node_id())
 
         timer = Timer(30, lambda x: print("hello", x), " ", oneshot=False)
         timer.start()
         self.dispatcher.add_timer(timer)
 
-        timer = Timer(0, lambda _: self.find_node(node_list, self.self_node_id), oneshot=True)
+        timer = Timer(0, lambda _: self.find_node(node_list, load_self_node_id()), oneshot=True)
         timer.start()
         self.dispatcher.add_timer(timer)
 
@@ -390,6 +381,13 @@ class Dht(EventProcessor):
             ('222.67.255.103', 6881),
             ('115.205.154.6', 6881),
             ('223.109.185.175', 6881),
+            # 117.86.48.188:6881
+            # 140.249.254.31:6881
+            # 220.120.78.94:6881
+            # 31.49.12.192:6881
+            # 35.155.156.153:6881
+            # 54.70.28.180:6881
+            # 121.157.67.69:6881
         )
 
         node_addr_list = []
@@ -421,3 +419,7 @@ def test():
 if __name__ == '__main__':
     dht = Dht("0.0.0.0", 42892)
     dht.run()
+
+    # for i in range(39999):
+    #     dht.join_table_test()
+    # dht.print_table()
