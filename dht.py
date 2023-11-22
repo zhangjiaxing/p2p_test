@@ -1,3 +1,4 @@
+import enum
 import socket
 import random
 import time
@@ -81,17 +82,39 @@ def compact_node_to_str(compact_node: bytes):
     return f"{node_id}[{addr}]"
 
 
+class NodeState(enum.Enum):
+    ACTIVE = 1
+    INACTIVE = 2
+    DEAD = 3
+
+
 class Node:
     def __init__(self, node_id: bytes, ip: str, port: int):
         self.node_id = node_id
         self.ip = ip
         self.port = port
+        self._state = NodeState.DEAD
+        self._last_time = 0
 
     def __eq__(self, other):
         return self.node_id == other.node_id
 
     def __hash__(self):
         return int.from_bytes(self.node_id, byteorder='big', signed=False)
+
+    def active(self):
+        self._last_time = time.time()
+        self._state = NodeState.ACTIVE
+
+    def check_state(self) -> NodeState:
+        inactive_time = time.time() - self._last_time
+        if inactive_time > 60 * 20:
+            self._state = NodeState.DEAD
+        elif inactive_time > 60 * 15:
+            self._state = NodeState.INACTIVE
+        else:
+            self._state = NodeState.ACTIVE
+        return self._state
 
     @staticmethod
     def node_list_from_bytes(nodes_bytes: bytes) -> typing.List:
@@ -159,18 +182,25 @@ class Bucket:
             else:
                 return idx  # 返回合适的K桶下标
         """
-        self.nodes: typing.OrderedDict[Node] = OrderedDict()  # 越后面的位置node越新鲜
-        self.caches: typing.OrderedDict[Node] = OrderedDict()  # 越后面的位置node越新鲜
+        self.nodes: typing.OrderedDict[bytes, Node] = OrderedDict()  # 越后面的位置node越新鲜
+        self.caches: typing.OrderedDict[bytes, Node] = OrderedDict()  # 越后面的位置node越新鲜
         self.node_start: bytes = node_start
         self.index: int = index
         self.power: int = power
+        self._last_change = 0
 
     def __str__(self):
         start = self.node_start.hex()
         return f"Bucket(idx: {self.index}, pow: {self.power}, start: {start}, node: {len(self.nodes)})"
 
-    def is_full(self):
-        return len(self.nodes) == self.K
+    def capacity(self, client_node_id: bytes) -> int:
+        if client_node_id is not None and self.in_range(client_node_id):
+            return 4 * self.K
+        else:
+            return self.K
+
+    def is_full(self, client_node_id: bytes) -> bool:
+        return len(self.nodes) >= self.capacity(client_node_id)
 
     def can_fork(self):
         # 每个节点只能分裂一次，每次分裂后，新生的两个K桶，左边的不能分裂，右边的可以分裂。
@@ -201,9 +231,15 @@ class Bucket:
         end_int = start_int + 2 ** self.power
         return start_int <= node_int < end_int
 
-    def add_node(self, node: Node):
+    def add_node(self, node: Node, client_node_id: bytes):
         # print(">>> in add_node: ", self, node)
-        if len(self.nodes) < self.K and node.node_id not in self.nodes:
+        self._last_change = time.time()
+
+        if node.node_id in self.nodes:
+            self.nodes[node.node_id].active()
+            return
+
+        if len(self.nodes) < self.capacity(client_node_id):
             self.nodes[node.node_id] = node
             self.nodes.move_to_end(node.node_id)
         else:
@@ -214,6 +250,15 @@ class Bucket:
     def clear_caches(self):
         while len(self.caches) > 16:
             self.caches.popitem()
+
+    def check_node_state(self):
+        for node_id, node in self.nodes.items():
+            state: NodeState = node.check_state()
+            if state == NodeState.DEAD:
+                self.nodes.pop(node_id)
+
+    def update(self):
+        pass
 
 
 class Dht(EventProcessor):
@@ -230,7 +275,7 @@ class Dht(EventProcessor):
 
     def check_bucket(self, idx: int):
         bucket = self.table[idx]
-        if bucket.is_full() and bucket.can_fork():
+        if bucket.is_full(self.self_node_id) and bucket.can_fork():
             bucket1, bucket2 = bucket.fork()
             self.table.pop(-1)
 
@@ -246,9 +291,9 @@ class Dht(EventProcessor):
     def join_table(self, node: Node):
         for idx, bucket in enumerate(self.table):
             if bucket.in_range(node.node_id):
-                bucket.add_node(node)
+                bucket.add_node(node, self.self_node_id)
                 self.check_bucket(idx)
-                print("join_table: ", node)
+                print("node_join_table: ", node)
                 return
         print("ERROR: join_dht")
         print("node", node)
@@ -256,16 +301,17 @@ class Dht(EventProcessor):
             print(idx, bucket)
         print("=======================END=============")
 
-    def ping_response_join_table(self, krpc: Krpc):
+    def response_join_table(self, krpc: Krpc):
         krpc_dict = krpc.json()
         node_id: bytes = krpc_dict[b'r'][b'id']
         node_ip = krpc.sender_ip
         node_port = krpc.sender_port
 
         node = Node(node_id, node_ip, node_port)
+        node.active()
         self.join_table(node)
 
-    def join_table_test(self):
+    def test_join_table(self):
         node = Node(random_node_id(), "0.0.0.0", 6666)
         self.join_table(node)
 
@@ -287,21 +333,16 @@ class Dht(EventProcessor):
         if ev.event_type == EventType.EVENT_REQUEST:
             pass
         if ev.event_type == EventType.EVENT_RESPONSE:
-            self.ping_response_join_table(ev.response_krpc)
+            self.response_join_table(ev.response_krpc)
 
     def find_node(self, node_addr_list: list, target_node: bytes, min_distance=float('+inf')):
-        # find_desc = {'target': target_node, 'send_set': set()}
-        # self.dispatcher.send_krpc(find_node_packet, node_addr, self.receive_find_node, find_desc)
         print(">>>>>>> in find_node")
 
         q = []
         node_set: typing.Set = set()
         for node_addr in node_addr_list:
-            ping_packet = self.KrpcRequest.ping()
-            self.dispatcher.send_krpc(ping_packet, node_addr, timeout=3)
-
             find_node_packet = self.KrpcRequest.find_node(target_node)
-            self.dispatcher.send_krpc(find_node_packet, node_addr, sync=True, timeout=3)
+            self.dispatcher.send_krpc(find_node_packet, node_addr, sync=True, timeout=2)
             tid = find_node_packet.transaction_id()
             q.append(tid)
 
@@ -342,10 +383,8 @@ class Dht(EventProcessor):
         if len(next_addr_list) > 0:
             self.find_node(next_addr_list, target_node, min_distance)
 
-
-    def run(self):
+    def find_self(self):
         node_list = self.get_start_node_list()
-
         # for node_addr in node_list:
         #     ping_packet = self.KrpcRequest.ping()
         #     print('ping: ', node_addr, ping_packet)
@@ -362,6 +401,8 @@ class Dht(EventProcessor):
         timer.start()
         self.dispatcher.add_timer(timer)
 
+    def run(self):
+        self.find_self()
         while True:
             self.dispatcher.process_event()
 

@@ -88,8 +88,6 @@ class EventDispatcher:
         self.wait_dict = {}
         self.processor = processor
 
-        self.processor.post_event(Event(EventType.EVENT_STARTUP))
-
     def __str__(self):
         return f"EventDispatcher: len(krpc_dict):{len(self.krpc_dict)}, len(krpc_heap): {len(self.krpc_heap)}"
 
