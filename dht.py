@@ -102,6 +102,9 @@ class Node:
     def __hash__(self):
         return int.from_bytes(self.node_id, byteorder='big', signed=False)
 
+    def addr(self):
+        return self.ip, self.port
+
     def active(self):
         self._last_time = time.time()
         self._state = NodeState.ACTIVE
@@ -191,7 +194,8 @@ class Bucket:
 
     def __str__(self):
         start = self.node_start.hex()
-        return f"Bucket(idx: {self.index}, pow: {self.power}, start: {start}, node: {len(self.nodes)})"
+        return f"Bucket(idx: {self.index}, pow: {self.power}, start: {start}, node: {len(self.nodes)}, \
+            caches: {len(self.caches)})"
 
     def capacity(self, client_node_id: bytes) -> int:
         if client_node_id is not None and self.in_range(client_node_id):
@@ -281,9 +285,9 @@ class Dht(EventProcessor):
 
             for node in bucket.nodes.values():
                 if bucket1.in_range(node.node_id):
-                    bucket1.add_node(node)
+                    bucket1.add_node(node, self.self_node_id)
                 else:
-                    bucket2.add_node(node)
+                    bucket2.add_node(node, self.self_node_id)
 
             self.table.append(bucket1)
             self.table.append(bucket2)
@@ -335,13 +339,67 @@ class Dht(EventProcessor):
         if ev.event_type == EventType.EVENT_RESPONSE:
             self.response_join_table(ev.response_krpc)
 
-    def find_node(self, node_addr_list: list, target_node: bytes, min_distance=float('+inf')):
-        print(">>>>>>> in find_node")
+    def find_near_nodes(self, target_node: bytes) -> typing.List[Node]:
+        near_node_list = []
+        found: bool = False
+        for bucket in self.table:
+            if bucket.in_range(target_node):
+                found = True
+
+            if found:
+                near_node_list.extend(bucket.nodes.values())
+                if len(near_node_list) >= 8:
+                    return near_node_list[:8]
+        return near_node_list
+
+    def find_node(self, target_node: bytes):
+        print(">>>>>>> in find_node", target_node.hex())
+
+        distance_min = float('inf')
+        distance_cur = 1 << 160
+        near_node_list: typing.List[Node] = self.find_near_nodes(target_node)
+
+        while distance_cur < distance_min:
+            print('near_node_list:')
+            for near_node in near_node_list:
+                print("near_node: ", near_node)
+
+            distance_min = distance_cur
+            q = []
+            node_set: typing.Set = set()
+            for near_node in near_node_list:
+                find_node_packet = self.KrpcRequest.find_node(self.self_node_id)
+                self.dispatcher.send_krpc(find_node_packet, near_node.addr(), sync=True, timeout=2)
+                tid = find_node_packet.transaction_id()
+                q.append(tid)
+
+            for tid in q:
+                ev: KrpcEvent = self.dispatcher.wait_response(tid)
+                if ev is not None and ev.event_type == EventType.EVENT_RESPONSE:
+                    try:
+                        response: typing.Dict = ev.response_krpc.json()
+                        nodes = Node.node_list_from_bytes(response[b'r'][b'nodes'])
+                        node_set.update(nodes)
+                    except Exception as e:
+                        print(e)
+
+            if not node_set:
+                break
+
+            node_list = list(node_set)
+            sort_node_list(node_list, self.self_node_id)
+            near_node_list = node_list[:16]
+            distance_cur = distance_metric(near_node_list[0], self.self_node_id)
+        print("find done =========")
+        return near_node_list
+
+    def find_self_node(self, node_addr_list: list, min_distance=float('+inf')):
+        print(">>>>>>> in find_self_node")
 
         q = []
         node_set: typing.Set = set()
         for node_addr in node_addr_list:
-            find_node_packet = self.KrpcRequest.find_node(target_node)
+            find_node_packet = self.KrpcRequest.find_node(self.self_node_id)
             self.dispatcher.send_krpc(find_node_packet, node_addr, sync=True, timeout=2)
             tid = find_node_packet.transaction_id()
             q.append(tid)
@@ -349,9 +407,12 @@ class Dht(EventProcessor):
         for tid in q:
             ev: KrpcEvent = self.dispatcher.wait_response(tid)
             if ev is not None and ev.event_type == EventType.EVENT_RESPONSE:
-                response: typing.Dict = ev.response_krpc.json()
-                nodes = Node.node_list_from_bytes(response[b'r'][b'nodes'])
-                node_set.update(nodes)
+                try:
+                    response: typing.Dict = ev.response_krpc.json()
+                    nodes = Node.node_list_from_bytes(response[b'r'][b'nodes'])
+                    node_set.update(nodes)
+                except Exception as e:
+                    print(e)
 
         print("node_set len :", len(node_set))
         if not node_set:
@@ -360,14 +421,14 @@ class Dht(EventProcessor):
             return
 
         node_list = list(node_set)
-        sort_node_list(node_list, target_node)
+        sort_node_list(node_list, self.self_node_id)
         node_list = node_list[:16]
 
         print("old_distance=", min_distance)
-        print("new_distance=", distance_metric(node_list[0], target_node))
+        print("new_distance=", distance_metric(node_list[0], self.self_node_id))
 
-        if min_distance > distance_metric(node_list[0], target_node):
-            min_distance = distance_metric(node_list[0], target_node)
+        if min_distance > distance_metric(node_list[0], self.self_node_id):
+            min_distance = distance_metric(node_list[0], self.self_node_id)
         else:
             print("find node done,,,,,,,,,")
             self.print_table()
@@ -375,15 +436,15 @@ class Dht(EventProcessor):
 
         next_addr_list = []
         for node in node_list:
-            print(f'find_node, node:{node} target: {target_node.hex()}')
+            print(f'find_node, node:{node} target: {self.self_node_id.hex()}')
 
             addr = (node.ip, node.port,)
             next_addr_list.append(addr)
 
         if len(next_addr_list) > 0:
-            self.find_node(next_addr_list, target_node, min_distance)
+            self.find_self_node(next_addr_list, min_distance)
 
-    def find_self(self):
+    def startup_join_dht(self):
         node_list = self.get_start_node_list()
         # for node_addr in node_list:
         #     ping_packet = self.KrpcRequest.ping()
@@ -397,12 +458,16 @@ class Dht(EventProcessor):
         timer.start()
         self.dispatcher.add_timer(timer)
 
-        timer = Timer(0, lambda _: self.find_node(node_list, load_self_node_id()), oneshot=True)
+        timer = Timer(0, lambda _: self.find_self_node(node_list), oneshot=True)
+        timer.start()
+        self.dispatcher.add_timer(timer)
+
+        timer = Timer(60, lambda x: self.find_node(random_node_id()), oneshot=False)
         timer.start()
         self.dispatcher.add_timer(timer)
 
     def run(self):
-        self.find_self()
+        self.startup_join_dht()
         while True:
             self.dispatcher.process_event()
 
