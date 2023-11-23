@@ -109,7 +109,7 @@ class Node:
         self._last_time = time.time()
         self._state = NodeState.ACTIVE
 
-    def check_state(self) -> NodeState:
+    def get_state(self) -> NodeState:
         inactive_time = time.time() - self._last_time
         if inactive_time > 60 * 20:
             self._state = NodeState.DEAD
@@ -164,10 +164,18 @@ def sort_node_list(node_list: typing.List[Node], target_id: bytes):
     node_list.sort(key=distance_cmp)
 
 
+class DhtBase(EventProcessor):
+    def find_node(self, target_node: bytes):
+        pass
+
+    def ping_node(self, node: Node):
+        pass
+
+
 class Bucket:
     K = 8
 
-    def __init__(self, node_start: bytes, index: int, power: int):
+    def __init__(self, dht: DhtBase, node_start: bytes, index: int, power: int):
         """
         :param node_start: 存储id的起始
         :param index: K桶下标, 另外index-1的数字也代表node_start 和 self_node_id 前多少位相同
@@ -191,6 +199,7 @@ class Bucket:
         self.index: int = index
         self.power: int = power
         self._last_change = 0
+        self._dht: DhtBase = dht
 
     def __str__(self):
         start = self.node_start.hex()
@@ -225,8 +234,8 @@ class Bucket:
         node_start_left = bytes_set_bit(node_start_left, self.index, not bit)
         node_start_right = bytes_set_bit(node_start_right, self.index, bit)
 
-        b1 = Bucket(node_start_left, self.index, self.power - 1)
-        b2 = Bucket(node_start_right, self.index + 1, self.power - 1)
+        b1 = Bucket(self._dht, node_start_left, self.index, self.power - 1)
+        b2 = Bucket(self._dht, node_start_right, self.index + 1, self.power - 1)
         return b1, b2
 
     def in_range(self, node_id: bytes):
@@ -255,17 +264,39 @@ class Bucket:
         while len(self.caches) > 16:
             self.caches.popitem()
 
+    def update_all(self):
+        self.check_node_state()
+        self.check_update()
+
     def check_node_state(self):
         for node_id, node in self.nodes.items():
-            state: NodeState = node.check_state()
+            state: NodeState = node.get_state()
             if state == NodeState.DEAD:
                 self.nodes.pop(node_id)
+                if self.caches:
+                    cache_id, cache_node = self.caches.popitem(last=True)
+                    self.nodes[cache_id] = cache_node
+            elif state == NodeState.INACTIVE:
+                self._dht.ping_node(node)
+            else:
+                pass
 
-    def update(self):
-        pass
+    def check_update(self):
+        if self._last_change + 15 * 60 > time.time():
+            pass
+
+        if not self.nodes:
+            node_id_int = int.from_bytes(self.node_start, byteorder='big', signed=False)
+            node_id_int += 1 << (self.power - 1)
+            node_id = node_id_int.to_bytes(20, 'big', signed=False)
+        else:
+            node_list = list(self.nodes.keys())
+            node_id = random.choice(node_list)
+
+        self._dht.find_node(node_id)
 
 
-class Dht(EventProcessor):
+class Dht(DhtBase):
     K = 8
 
     def __init__(self, local_ip, local_port):
@@ -274,7 +305,7 @@ class Dht(EventProcessor):
         self.KrpcRequest = KrpcRequest
         self.KrpcRequest.init_class(self.self_node_id)
         self.table: typing.List[Bucket] = []
-        first_bucket = Bucket(b'\0' * 20, 0, 160)
+        first_bucket = Bucket(self, b'\0' * 20, 0, 160)
         self.table.append(first_bucket)
 
     def check_bucket(self, idx: int):
@@ -352,6 +383,10 @@ class Dht(EventProcessor):
                     return near_node_list[:8]
         return near_node_list
 
+    def ping_node(self, node: Node):
+        find_node_packet = self.KrpcRequest.find_node(node.node_id)
+        self.dispatcher.send_krpc(find_node_packet, node.addr(), timeout=3)
+
     def find_node(self, target_node: bytes):
         print(">>>>>>> in find_node", target_node.hex())
 
@@ -368,7 +403,7 @@ class Dht(EventProcessor):
             q = []
             node_set: typing.Set = set()
             for near_node in near_node_list:
-                find_node_packet = self.KrpcRequest.find_node(self.self_node_id)
+                find_node_packet = self.KrpcRequest.find_node(target_node)
                 self.dispatcher.send_krpc(find_node_packet, near_node.addr(), sync=True, timeout=2)
                 tid = find_node_packet.transaction_id()
                 q.append(tid)
@@ -387,9 +422,9 @@ class Dht(EventProcessor):
                 break
 
             node_list = list(node_set)
-            sort_node_list(node_list, self.self_node_id)
+            sort_node_list(node_list, target_node)
             near_node_list = node_list[:16]
-            distance_cur = distance_metric(near_node_list[0], self.self_node_id)
+            distance_cur = distance_metric(near_node_list[0], target_node)
         print("find done =========")
         return near_node_list
 
@@ -454,17 +489,25 @@ class Dht(EventProcessor):
         #     self.find_node(node_addr, self.self_node_id)
         #     # self.find_node(node_addr, random_node_id())
 
-        timer = Timer(30, lambda x: print("hello", x), " ", oneshot=False)
+        timer = Timer(0, lambda _: self.find_self_node(node_list), oneshot=True)
         timer.start()
         self.dispatcher.add_timer(timer)
 
-        timer = Timer(0, lambda _: self.find_self_node(node_list), oneshot=True)
+        timer = Timer(120, lambda x: self.update_bucket(), oneshot=False)
         timer.start()
         self.dispatcher.add_timer(timer)
 
         timer = Timer(60, lambda x: self.find_node(random_node_id()), oneshot=False)
         timer.start()
         self.dispatcher.add_timer(timer)
+
+        timer = Timer(30, lambda x: self.print_table(), oneshot=False)
+        timer.start()
+        self.dispatcher.add_timer(timer)
+
+    def update_bucket(self):
+        for bucket in self.table:
+            bucket.update_all()
 
     def run(self):
         self.startup_join_dht()
