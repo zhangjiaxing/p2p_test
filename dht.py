@@ -18,6 +18,9 @@ https://blog.csdn.net/u012785382/article/details/70738880
 https://www.jianshu.com/p/159c647c0095?utm_campaign=maleskine&utm_content=note&utm_medium=seo_notes
 https://fenying.gitbooks.io/bittorrent-specification-chinese-edition/content/
 https://www.cnblogs.com/LittleHann/p/6180296.html#_lab2_1_2
+
+TODO:
+支持保存dht
 """
 
 
@@ -360,15 +363,26 @@ class Dht(DhtBase):
     def receive_ping(ev: KrpcEvent, args):
         if ev.event_type == EventType.EVENT_TIMEOUT:
             return
-        print('receive ping response: ', ev.event_type, ev.response_krpc.sender_ip)
+        print('receive ping response: ', ev.event_type, ev.remote_krpc.sender_ip)
+
+    def process_request(self, ev: KrpcEvent):
+        krpc: Krpc = ev.remote_krpc
+        krpc_dict: dict = krpc.json()
+        if krpc_dict[b'y'] != b'q':
+            pass
+
+        print('收到请求', krpc)
+        if krpc_dict[b'q'] == b'ping':
+            packet = krpc.ping_response()
+            self.dispatcher.send_krpc(packet, (krpc.sender_ip, krpc.sender_port))
 
     def post_event(self, ev: Event or KrpcEvent):
         if ev.event_type == EventType.EVENT_TIMEOUT:
             pass
         if ev.event_type == EventType.EVENT_REQUEST:
-            pass
+            self.process_request(ev)
         if ev.event_type == EventType.EVENT_RESPONSE:
-            self.response_join_table(ev.response_krpc)
+            self.response_join_table(ev.remote_krpc)
 
     def find_near_nodes(self, target_node: bytes) -> typing.List[Node]:
         near_node_list = []
@@ -412,7 +426,7 @@ class Dht(DhtBase):
                 ev: KrpcEvent = self.dispatcher.wait_response(tid)
                 if ev is not None and ev.event_type == EventType.EVENT_RESPONSE:
                     try:
-                        response: typing.Dict = ev.response_krpc.json()
+                        response: typing.Dict = ev.remote_krpc.json()
                         nodes = Node.node_list_from_bytes(response[b'r'][b'nodes'])
                         node_set.update(nodes)
                     except Exception as e:
@@ -443,7 +457,7 @@ class Dht(DhtBase):
             ev: KrpcEvent = self.dispatcher.wait_response(tid)
             if ev is not None and ev.event_type == EventType.EVENT_RESPONSE:
                 try:
-                    response: typing.Dict = ev.response_krpc.json()
+                    response: typing.Dict = ev.remote_krpc.json()
                     nodes = Node.node_list_from_bytes(response[b'r'][b'nodes'])
                     node_set.update(nodes)
                 except Exception as e:
@@ -497,9 +511,9 @@ class Dht(DhtBase):
         timer.start()
         self.dispatcher.add_timer(timer)
 
-        timer = Timer(60, lambda x: self.find_node(random_node_id()), oneshot=False)
-        timer.start()
-        self.dispatcher.add_timer(timer)
+        # timer = Timer(60, lambda x: self.find_node(random_node_id()), oneshot=True)
+        # timer.start()
+        # self.dispatcher.add_timer(timer)
 
         timer = Timer(30, lambda x: self.print_table(), oneshot=False)
         timer.start()

@@ -22,10 +22,10 @@ class Event:
 
 
 class KrpcEvent(Event):
-    def __init__(self, event_type: EventType, req_krpc: KrpcRequest or None = None, response_krpc: Krpc or None = None):
+    def __init__(self, event_type: EventType, local_krpc: KrpcRequest or None = None, remote_krpc: Krpc or None = None):
         super().__init__(event_type)
-        self.req_krpc: KrpcRequest or None = req_krpc
-        self.response_krpc: Krpc or None = response_krpc
+        self.local_krpc: KrpcRequest or None = local_krpc
+        self.remote_krpc: Krpc or None = remote_krpc
 
     def __str__(self):
         desc = ''
@@ -37,9 +37,9 @@ class KrpcEvent(Event):
             desc += 'response event:'
 
         desc += '\nreq_krpc: '
-        desc += str(self.req_krpc)
+        desc += str(self.local_krpc)
         desc += '\nresponse_krpc: '
-        desc += str(self.response_krpc)
+        desc += str(self.remote_krpc)
         desc += '\n'
         return desc
 
@@ -121,15 +121,15 @@ class EventDispatcher:
         if ev is not None:
             self.processor.post_event(ev)
 
-            if ev.req_krpc:
-                tid = ev.req_krpc.transaction_id()
+            if ev.local_krpc:
+                tid = ev.local_krpc.transaction_id()
                 if tid in self.wait_set:
                     self.wait_dict[tid] = ev
 
-            if ev.req_krpc and ev.req_krpc.callback:
-                ev.req_krpc.callback(ev, ev.req_krpc.args)
+            if ev.local_krpc and ev.local_krpc.callback:
+                ev.local_krpc.callback(ev, ev.local_krpc.args)
 
-    def process_timeout_krpc(self) -> KrpcEvent | None:
+    def process_timeout_krpc(self) -> KrpcEvent or None:
         krpc = heapq.heappop(self.krpc_heap)
         t = krpc.transaction_id()
         if t in self.krpc_dict:
@@ -138,7 +138,7 @@ class EventDispatcher:
         else:
             return None
 
-    def process_receive_krpc(self, recv_krpc: Krpc) -> KrpcEvent | None:
+    def process_receive_krpc(self, recv_krpc: Krpc) -> KrpcEvent or None:
         t = recv_krpc.transaction_id()
         if t in self.krpc_dict.keys():
             send_rpc: KrpcRequest = self.krpc_dict.pop(t)
