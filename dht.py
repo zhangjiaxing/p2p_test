@@ -511,9 +511,9 @@ class Dht(DhtBase):
         timer.start()
         self.dispatcher.add_timer(timer)
 
-        # timer = Timer(60, lambda x: self.find_node(random_node_id()), oneshot=True)
-        # timer.start()
-        # self.dispatcher.add_timer(timer)
+        timer = Timer(60, lambda x: self.find_node(random_node_id()), oneshot=True)
+        timer.start()
+        self.dispatcher.add_timer(timer)
 
         timer = Timer(30, lambda x: self.print_table(), oneshot=False)
         timer.start()
