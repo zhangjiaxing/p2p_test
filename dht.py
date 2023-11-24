@@ -368,11 +368,11 @@ class Dht(DhtBase):
     def process_request(self, ev: KrpcEvent):
         krpc: Krpc = ev.remote_krpc
         krpc_dict: dict = krpc.json()
-        if krpc_dict[b'y'] != b'q':
+        if krpc_dict.get(b'y') != b'q':
             pass
 
-        print('收到请求', krpc)
-        if krpc_dict[b'q'] == b'ping':
+        print('收到请求', krpc_dict)
+        if krpc_dict.get(b'q') == b'ping':
             packet = krpc.ping_response()
             self.dispatcher.send_krpc(packet, (krpc.sender_ip, krpc.sender_port))
 
